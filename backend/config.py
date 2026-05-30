@@ -14,8 +14,9 @@ try:
 except Exception:
     pass
 
-GHANA_NLP_API_KEY = os.getenv("GHANA_NLP_API_KEY", "")
-GHANA_NLP_ASR_URL = os.getenv("GHANA_NLP_ASR_URL", "https://translation-api.ghananlp.org/asr/v2/transcribe")
+GHANA_NLP_API_KEY     = os.getenv("GHANA_NLP_API_KEY", "")          # translation key
+GHANA_NLP_ASR_KEY     = os.getenv("GHANA_NLP_ASR_KEY", os.getenv("GHANA_NLP_API_KEY", ""))  # ASR key (falls back to translation key if same)
+GHANA_NLP_ASR_URL     = os.getenv("GHANA_NLP_ASR_URL", "https://translation-api.ghananlp.org/asr/v2/transcribe")
 
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "base")
 

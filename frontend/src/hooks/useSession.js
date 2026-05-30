@@ -10,13 +10,19 @@ export function useSession() {
   const [note,        setNote]        = useState(null);
   const [summary,     setSummary]     = useState("");
   const [language,    setLanguage]    = useState("—");
+  const [langMode,    setLangMode]    = useState("auto");  // "en" | "tw" | "auto"
   const [generating,  setGenerating]  = useState(false);
   const [wsStatus,    setWsStatus]    = useState("disconnected");
+  const [asrError,    setAsrError]    = useState(null);
 
   const wsRef = useRef(null);
 
+  const reconnectTimer = useRef(null);
+
   const connectWs = useCallback(() => {
-    if (wsRef.current && wsRef.current.readyState < 2) return;
+    // Don't open a second socket if one is already connecting or open
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
+
     const ws = new WebSocket(WS);
     wsRef.current = ws;
 
@@ -34,9 +40,18 @@ export function useSession() {
         if (data.type === "transcript") {
           setChunks((prev) => [
             ...prev,
-            { text: data.text, language: data.language, isTwi: data.is_twi },
+            {
+              text:         data.text,
+              originalText: data.original_text || data.text,
+              language:     data.language,
+              isTwi:        data.is_twi,
+              translated:   data.is_twi && data.original_text !== data.text,
+            },
           ]);
           setLanguage(data.language);
+        }
+        if (data.type === "error") {
+          setAsrError(data.message);
         }
         if (data.type === "note_ready") {
           setNote(data.note);
@@ -48,26 +63,54 @@ export function useSession() {
 
     ws.onclose = () => {
       setWsStatus("disconnected");
-      setTimeout(connectWs, 3000);
+      // Only schedule reconnect if this socket is still the current one
+      if (wsRef.current === ws) {
+        reconnectTimer.current = setTimeout(connectWs, 3000);
+      }
+    };
+
+    ws.onerror = () => {
+      // Let onclose handle the reconnect
     };
   }, []);
 
   useEffect(() => {
     connectWs();
-    return () => wsRef.current?.close();
+    return () => {
+      // Cancel pending reconnect timer
+      clearTimeout(reconnectTimer.current);
+      // Only close if the socket is open — avoids the "closed before established" error
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      } else if (ws) {
+        // Detach handlers so stale sockets don't trigger reconnects after unmount
+        ws.onclose = null;
+        ws.onerror = null;
+      }
+    };
   }, [connectWs]);
 
-  const startSession = useCallback(async () => {
-    const res = await fetch(`${API}/session/start`, { method: "POST" });
-    const data = await res.json();
-    if (!data.error) {
-      setRecording(true);
-      setChunks([]);
-      setNote(null);
-      setSummary("");
-      setLanguage("—");
+  const startSession = useCallback(async (mode) => {
+    try {
+      const res = await fetch(`${API}/session/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang_mode: mode }),
+      });
+      const data = await res.json();
+      if (!data.error) {
+        setRecording(true);
+        setChunks([]);
+        setNote(null);
+        setSummary("");
+        setLanguage("—");
+        setAsrError(null);
+      }
+      return data;
+    } catch (err) {
+      setAsrError("Cannot reach backend. Is the server running on port 8001?");
     }
-    return data;
   }, []);
 
   const stopSession = useCallback(async () => {
@@ -100,7 +143,9 @@ export function useSession() {
   return {
     consented, setConsented,
     recording, chunks, note, summary, language,
-    generating, wsStatus, fullTranscript,
+    langMode, setLangMode,
+    generating, wsStatus, asrError,
+    fullTranscript,
     startSession, stopSession, generateNote, resetSession,
   };
 }

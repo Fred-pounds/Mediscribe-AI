@@ -3,8 +3,10 @@ import json
 import threading
 import logging
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.asr.router import ASRRouter
@@ -88,14 +90,14 @@ app.add_middleware(
 
 # --- Audio worker (background thread) ---
 
-def _audio_worker():
+def _audio_worker(lang_mode: str = "auto"):
     global _capture, _router, _session
 
-    log.info(f"Audio worker started. WS clients: {len(_ws_clients)}")
+    log.info(f"Audio worker started. lang_mode={lang_mode} WS clients: {len(_ws_clients)}")
 
     _capture = AudioCapture()
-    _router = ASRRouter()
-    _router.reset()
+    _router = ASRRouter(lang_mode=lang_mode)
+    _router.reset(lang_mode=lang_mode)
 
     try:
         _capture.start()
@@ -114,7 +116,8 @@ def _audio_worker():
             result = _router.process_chunk(chunk)
         except Exception as e:
             log.error(f"ASR error: {e}")
-            _enqueue({"type": "error", "message": f"ASR error: {e}"})
+            if _router.should_broadcast_error():
+                _enqueue({"type": "error", "message": f"ASR error: {e}"})
             continue
 
         text = result["text"].strip()
@@ -127,6 +130,7 @@ def _audio_worker():
             _enqueue({
                 "type": "transcript",
                 "text": text,
+                "original_text": result.get("original_text", text),
                 "language": _router.language_label,
                 "is_twi": result["is_twi"],
             })
@@ -137,8 +141,12 @@ def _audio_worker():
 
 # --- REST endpoints ---
 
+class StartSessionRequest(BaseModel):
+    lang_mode: Literal["en", "tw", "auto"] = "auto"
+
+
 @app.post("/session/start")
-async def start_session():
+async def start_session(body: StartSessionRequest = StartSessionRequest()):
     global _session
     if _session["running"]:
         return {"status": "already_running"}
@@ -148,11 +156,12 @@ async def start_session():
         "transcript_chunks": [],
         "soap_note": None,
         "language": "unknown",
+        "lang_mode": body.lang_mode,
     }
 
-    thread = threading.Thread(target=_audio_worker, daemon=True)
+    thread = threading.Thread(target=_audio_worker, args=(body.lang_mode,), daemon=True)
     thread.start()
-    return {"status": "started"}
+    return {"status": "started", "lang_mode": body.lang_mode}
 
 
 @app.post("/session/stop")

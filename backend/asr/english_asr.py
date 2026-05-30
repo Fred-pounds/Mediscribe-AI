@@ -17,15 +17,15 @@ def get_model() -> WhisperModel:
     return _model
 
 
-def transcribe(audio: np.ndarray) -> str:
-    """Transcribe English audio locally. Returns plain text."""
+def transcribe(audio: np.ndarray, language: str = "en") -> str:
+    """Transcribe audio locally with faster-whisper. language can be any Whisper-supported code."""
     model = get_model()
     segments, _ = model.transcribe(
         audio,
-        language="en",
+        language=language,
         task="transcribe",
         without_timestamps=True,
-        vad_filter=True,           # skip silent segments
+        vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
     )
     return " ".join(seg.text.strip() for seg in segments)

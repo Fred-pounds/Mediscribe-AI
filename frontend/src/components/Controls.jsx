@@ -1,10 +1,85 @@
-export default function Controls({ recording, hasChunks, generating, onStart, onStop, onGenerate, onReset }) {
+const LANG_OPTIONS = [
+  { value: "en",   label: "English",     sub: null,         comingSoon: false },
+  { value: "tw",   label: "Twi",         sub: "Coming Soon", comingSoon: true  },
+  { value: "auto", label: "Auto Detect", sub: "Experimental", comingSoon: false },
+];
+
+function LanguageSelector({ value, onChange, disabled }) {
   return (
-    <div className="flex items-center gap-3 px-6 py-3 border-b"
+    <div className="flex items-center gap-1 p-1 rounded-xl"
+         style={{ background: "var(--paper-warm)", border: "1px solid rgba(13,110,107,0.13)" }}>
+      {LANG_OPTIONS.map((opt) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            onClick={() => opt.comingSoon ? null : onChange(opt.value)}
+            disabled={disabled || opt.comingSoon}
+            title={opt.comingSoon ? "Twi support coming in a future release" : undefined}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 disabled:cursor-not-allowed"
+            style={opt.comingSoon
+              ? { color: "var(--ink-faint)", opacity: 0.5 }
+              : active
+              ? {
+                  background: "var(--teal)",
+                  color: "white",
+                  boxShadow: "0 2px 8px rgba(13,110,107,0.28)",
+                }
+              : { color: "var(--ink-muted)" }
+            }
+          >
+            {/* Radio dot */}
+            <span className="w-3 h-3 rounded-full flex items-center justify-center border flex-shrink-0"
+                  style={{
+                    borderColor: active ? "rgba(255,255,255,0.6)" : "var(--ink-faint)",
+                  }}>
+              {active && (
+                <span className="w-1.5 h-1.5 rounded-full"
+                      style={{ background: "white" }} />
+              )}
+            </span>
+
+            <span>{opt.label}</span>
+
+            {opt.sub && (
+              <span className="text-[9px] px-1 py-px rounded font-semibold"
+                    style={active
+                      ? { background: "rgba(255,255,255,0.2)", color: "rgba(255,255,255,0.85)" }
+                      : { background: "var(--paper-soft)",     color: "var(--ink-faint)" }
+                    }>
+                {opt.sub}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function Controls({
+  recording, hasChunks, generating,
+  langMode, onLangChange,
+  onStart, onStop, onGenerate, onReset,
+}) {
+  return (
+    <div className="flex items-center gap-3 px-6 py-3 border-b flex-wrap"
          style={{ borderColor: "rgba(13,110,107,0.10)", background: "rgba(253,250,243,0.7)" }}>
 
+      {/* Language selector */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-semibold" style={{ color: "var(--ink-muted)" }}>
+          Consultation Language
+        </span>
+        <LanguageSelector value={langMode} onChange={onLangChange} disabled={recording} />
+      </div>
+
+      {/* Divider */}
+      <div className="w-px h-6 mx-1" style={{ background: "rgba(13,110,107,0.13)" }} />
+
+      {/* Start / Stop */}
       {!recording ? (
-        <button onClick={onStart}
+        <button onClick={() => onStart(langMode)}
                 className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white transition-all duration-200 hover:opacity-90 active:scale-[0.97]"
                 style={{ background: "linear-gradient(135deg, #053E3D, #0D6E6B)", boxShadow: "0 4px 16px rgba(13,110,107,0.30)" }}>
           <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
@@ -19,6 +94,7 @@ export default function Controls({ recording, hasChunks, generating, onStart, on
         </button>
       )}
 
+      {/* Generate Note */}
       <button onClick={onGenerate}
               disabled={recording || !hasChunks || generating}
               className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 disabled:opacity-35 disabled:cursor-not-allowed hover:enabled:opacity-85 active:enabled:scale-[0.97]"
@@ -29,7 +105,7 @@ export default function Controls({ recording, hasChunks, generating, onStart, on
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
             </svg>
-            Generating…
+            Generating...
           </>
         ) : (
           <>

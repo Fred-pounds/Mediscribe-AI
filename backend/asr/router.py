@@ -1,58 +1,94 @@
+import time
 import numpy as np
-from faster_whisper import WhisperModel
 
 from backend.asr.detector import LanguageDetector
 from backend.asr import english_asr, twi_asr
 from backend.audio.capture import AudioCapture
 
+LANG_AUTO = "auto"
+LANG_EN   = "en"
+LANG_TW   = "tw"
+
 
 class ASRRouter:
     """
-    Routes each audio chunk to the correct ASR backend based on detected language.
-    Maintains language state across chunks so detection only runs on the first chunk
-    of each session (or when forced to re-detect).
+    Routes each audio chunk to the correct ASR backend.
+
+    lang_mode:
+      "en"   — faster-whisper, English
+      "tw"   — GhanaNLP ASR + GhanaNLP translate to English
+      "auto" — Whisper detect_language on first chunk, then lock
+               (if Twi detected, uses GhanaNLP ASR + translate)
     """
 
-    def __init__(self):
-        self._model: WhisperModel = english_asr.get_model()
+    def __init__(self, lang_mode: str = LANG_AUTO):
+        self._model = english_asr.get_model()
         self._detector = LanguageDetector(self._model)
+        self._lang_mode = lang_mode
         self._detected_language: str | None = None
-        self._is_twi: bool = False
+        self._is_twi: bool = (lang_mode == LANG_TW)
+        self._last_error_time: float = 0.0
 
-    def reset(self):
-        """Call at the start of a new session to re-detect language."""
+    def reset(self, lang_mode: str = LANG_AUTO):
+        self._lang_mode = lang_mode
         self._detected_language = None
-        self._is_twi = False
-
-    @property
-    def current_language(self) -> str:
-        if self._detected_language is None:
-            return "unknown"
-        return "tw" if self._is_twi else self._detected_language
+        self._is_twi = (lang_mode == LANG_TW)
+        self._last_error_time = 0.0
 
     @property
     def language_label(self) -> str:
+        if self._lang_mode == LANG_TW:
+            return "Twi"
+        if self._lang_mode == LANG_EN:
+            return "English"
         return "Twi" if self._is_twi else "English"
+
+    def _transcribe_twi(self, audio: np.ndarray) -> tuple[str, str]:
+        """
+        GhanaNLP ASR → Twi text, then GhanaNLP translate → English text.
+        Returns (english_text, original_twi_text).
+        Raises on API error so the caller can broadcast it.
+        """
+        mp3_bytes = AudioCapture.numpy_to_mp3_bytes(audio)
+        twi_text  = twi_asr.transcribe(mp3_bytes)
+        if not twi_text.strip():
+            return "", ""
+        eng_text = twi_asr.translate_to_english(twi_text)
+        return eng_text, twi_text
 
     def process_chunk(self, audio: np.ndarray) -> dict:
         """
-        Accepts a float32 mono 16kHz numpy array.
-        Returns {"text": str, "language": str, "is_twi": bool}
+        Returns:
+          text          — English text (translated when Twi)
+          original_text — original Twi text (same as text for English)
+          language      — "tw" | "en"
+          is_twi        — bool
         """
-        # Detect language on first chunk only
+        if self._lang_mode == LANG_EN:
+            text = english_asr.transcribe(audio)
+            return {"text": text, "original_text": text, "language": "en", "is_twi": False}
+
+        if self._lang_mode == LANG_TW:
+            eng, twi = self._transcribe_twi(audio)   # raises on 401/network error
+            return {"text": eng, "original_text": twi, "language": "tw", "is_twi": True}
+
+        # --- auto detect ---
         if self._detected_language is None:
-            lang, prob = self._detector.detect(audio)
+            lang, _ = self._detector.detect(audio)
             self._detected_language = lang
             self._is_twi = self._detector.is_twi(audio)
 
         if self._is_twi:
-            mp3_bytes = AudioCapture.numpy_to_mp3_bytes(audio)
-            text = twi_asr.transcribe(mp3_bytes)
-        else:
-            text = english_asr.transcribe(audio)
+            eng, twi = self._transcribe_twi(audio)
+            return {"text": eng, "original_text": twi, "language": "tw", "is_twi": True}
 
-        return {
-            "text": text,
-            "language": self.current_language,
-            "is_twi": self._is_twi,
-        }
+        text = english_asr.transcribe(audio)
+        return {"text": text, "original_text": text, "language": "en", "is_twi": False}
+
+    def should_broadcast_error(self) -> bool:
+        """Rate-limit error messages to at most one every 5 seconds."""
+        now = time.time()
+        if now - self._last_error_time > 5.0:
+            self._last_error_time = now
+            return True
+        return False
